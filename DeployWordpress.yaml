@@ -1,0 +1,408 @@
+AWSTemplateFormatVersion: 2010-09-09
+Transform: 'AWS::LanguageExtensions'
+
+Description: Deploying Wordpress on EC2 instance and connecting with RDS database using Cloudformation.
+
+# ** Parameters **
+Parameters:
+  Environment:
+    Description: Select deployment environment of your choice
+    Type: String
+    Default: dev
+    AllowedValues:
+    - dev
+    - testing
+    - production
+
+  VpcName:
+    Description: Specified the name for VPC
+    Type: String
+    Default: mustafa-vpc
+
+  VpcCIDR:
+    Description: IP Range for VPC
+    Type: String
+    Default: 10.0.0.0/16
+
+  InternetGatewayName:
+    Description: Name of custom internet gateway.
+    Type: String
+    Default: mustafa-igw
+
+  NatGatewayName:
+    Description: Name of custom NAT gateway.
+    Type: String
+    Default: mustafa-ngw
+
+  PublicRouteTableName:
+    Description: Name of public route table.
+    Type: String
+    Default: mustafa-public-RT
+
+  PublicRoute1CIDR:
+    Description: CIDR block for destination.
+    Type: String
+    Default: 0.0.0.0/0
+
+  PrivateRouteTableName:
+    Description: Name of private route table.
+    Type: String
+    Default: mustafa-private-RT
+
+  PrivateRoute1CIDR:
+    Description: CIDR block for destination.
+    Type: String
+    Default: 0.0.0.0/0
+
+  PublicSubnetName:
+    Description: Name of public subnet
+    Type: String
+    Default: mustafa-public-subnet
+
+  PrivateSubnetName:
+    Description: Name of public subnet
+    Type: String
+    Default: mustafa-private-subnet
+
+  MySqlCidr:
+    Description: The CIDR block range that will be allowed for MySQL access.
+    Type: String
+    Default: 10.0.2.0/24
+
+  HttpAccessCidr:
+    Description: The CIDR block range that will be allowed for HTTP access.
+    Type: String
+    Default: "0.0.0.0/0"
+
+  SecurityGroupName:
+    Description: Name of the Security Group
+    Type: String
+    Default: mustafa-sg
+
+  KeyName:
+    Description: Name of existing EC2 keypair.
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: mustafa-california-key
+
+  RdsInstanceName:
+    Description: Name of the RDS instance
+    Type: String
+    Default: mustafa-db
+
+  DatabaseName:
+    Description: Name of the database
+    Type: String
+    Default: wordpress
+
+  DatabaseUsername:
+    Description: Username required for the database
+    Type: String
+    Default: m_mustafa
+
+  DatabaseUserPassword:
+    Description: Password required for the database
+    Type: String
+    Default: no1knows786
+
+  Subnets:
+    Type: CommaDelimitedList
+    Default: "Subnet1,Subnet2,Subnet3,Subnet4"
+    Description: Number of subnets to create.
+
+  AvailabilityZones:
+    Type: List<AWS::EC2::AvailabilityZone::Name>
+    Description: Select AZs to include in list
+  # ** Mappings **
+Mappings:
+  EnvironmentConfig:
+    dev:
+      InstanceType: t2.micro
+      ami: ami-018a1ea25ff5268f0
+    testing:
+      InstanceType: t2.micro
+      ami: ami-08d4f6bbae664bd41
+    production:
+      InstanceType: t2.micro
+      ami: ami-0810e059735ce3a9d
+
+  CidrIndexPublicSubnets:
+    us-west-1a:
+      Index: "0"
+    us-west-1c:
+      Index: "1"
+
+  CidrIndexPrivateSubnets:
+    us-west-1a:
+      Index: "2"
+    us-west-1c:
+      Index: "3"
+
+# ** Resources **
+Resources:
+  MyVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      Tags:
+      - Key: Name
+        Value: !Ref VpcName
+
+  MyInternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Ref InternetGatewayName
+
+  AttachVpc:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !Ref MyInternetGateway
+
+  ElasticIPAddress:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  MyNatGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt ElasticIPAddress.AllocationId
+      SubnetId: !Ref MyPublicSubnetuswest1a
+      Tags:
+      - Key: Name
+        Value: !Ref NatGatewayName
+
+  'Fn::ForEach::CreatingPublicSubnets':
+  - AZ
+  - !Ref AvailabilityZones
+  - 'MyPublicSubnet&{AZ}':
+      Type: AWS::EC2::Subnet
+      Properties:
+        VpcId: !Ref MyVPC
+        CidrBlock: !Select
+          - !FindInMap [ CidrIndexPublicSubnets, !Sub "${AZ}", Index ]
+          - !Cidr
+            - !Ref VpcCIDR
+            - 4
+            - 8
+        AvailabilityZone: !Sub "${AZ}"
+        Tags:
+        - Key: Name
+          Value: !Join [ "-", [ !Ref PublicSubnetName, !Sub "${AZ}" ] ]
+    # Route Table Association
+    'MyPublicSubnet&{AZ}RouteTableAssociation':
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties:
+        SubnetId:
+          #'MyPublicSubnet&{AZ}'
+          !Ref
+          Fn::Join:
+          - ""
+          - - "MyPublicSubnet"
+            - Fn::Join:
+              - ""
+              - - !Select
+                  - 0
+                  - Fn::Split:
+                    - "-"
+                    - Fn::Sub: "${AZ}"
+                - !Select
+                  - 1
+                  - Fn::Split:
+                    - "-"
+                    - Fn::Sub: "${AZ}"
+                - !Select
+                  - 2
+                  - Fn::Split:
+                    - "-"
+                    - Fn::Sub: "${AZ}"
+        RouteTableId: !Ref MyPublicRouteTable
+
+  'Fn::ForEach::CreatingPrivateSubnets':
+  - AZ
+  - !Ref AvailabilityZones
+  - 'MyPrivateSubnet&{AZ}':
+      Type: AWS::EC2::Subnet
+      Properties:
+        VpcId: !Ref MyVPC
+        CidrBlock: !Select
+          - !FindInMap [ CidrIndexPrivateSubnets, !Sub "${AZ}", Index ]
+          - !Cidr
+            - !Ref VpcCIDR
+            - 4
+            - 8
+        AvailabilityZone: !Sub "${AZ}"
+        Tags:
+        - Key: Name
+          Value: !Join [ "-", [ !Ref PrivateSubnetName, !Sub "${AZ}" ] ]
+    # Route Table Association
+    'MyPrivateSubnet&{AZ}RouteTableAssociation':
+      Type: AWS::EC2::SubnetRouteTableAssociation
+      Properties:
+        SubnetId:
+          #'MyPrivateSubnet&{AZ}'
+          !Ref
+          Fn::Join:
+          - ""
+          - - "MyPrivateSubnet"
+            - Fn::Join:
+              - ""
+              - - !Select
+                  - 0
+                  - Fn::Split:
+                    - "-"
+                    - Fn::Sub: "${AZ}"
+                - !Select
+                  - 1
+                  - Fn::Split:
+                    - "-"
+                    - Fn::Sub: "${AZ}"
+                - !Select
+                  - 2
+                  - Fn::Split:
+                    - "-"
+                    - Fn::Sub: "${AZ}"
+        RouteTableId: !Ref MyPrivateRouteTable
+
+  MyPublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+      - Key: Name
+        Value: !Ref PublicRouteTableName
+
+  PublicRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref MyPublicRouteTable
+      DestinationCidrBlock: !Ref PublicRoute1CIDR
+      GatewayId: !Ref MyInternetGateway
+
+  MyPrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+      - Key: Name
+        Value: !Ref PrivateRouteTableName
+
+  PrivateRoute1:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref MyPrivateRouteTable
+      DestinationCidrBlock: !Ref PrivateRoute1CIDR
+      NatGatewayId: !Ref MyNatGateway
+
+  MySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP and MySQL access
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 3306
+        ToPort: 3306
+        CidrIp: !GetAtt MyPrivateSubnetuswest1a.CidrBlock #!Ref MySqlCidr
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: !Ref HttpAccessCidr
+      Tags:
+      - Key: Name
+        Value: !Ref SecurityGroupName
+
+  MyRdsDatabase:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      Engine: MySQL
+      EngineVersion: 8.0.33
+      DBInstanceIdentifier: !Ref RdsInstanceName
+      DBInstanceClass: db.t3.micro
+      StorageType: gp2
+      AllocatedStorage: '20'
+      MasterUsername: !Ref DatabaseUsername
+      MasterUserPassword: !Ref DatabaseUserPassword
+      DBName: !Ref DatabaseName
+      DBSubnetGroupName: !Ref MyDBSubnetGroup
+      VPCSecurityGroups:
+      - !Ref MySecurityGroup
+
+  MyDBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Subnet group for RDS
+      SubnetIds:
+      - !Ref MyPrivateSubnetuswest1a
+      - !Ref MyPrivateSubnetuswest1c
+
+  MyEC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !FindInMap [ EnvironmentConfig, !Ref Environment, InstanceType ]
+      ImageId: !FindInMap [ EnvironmentConfig, !Ref Environment, ami ]
+      KeyName: !Ref KeyName
+      SubnetId: !Ref MyPrivateSubnetuswest1a
+      SecurityGroupIds:
+      - !Ref MySecurityGroup
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          sudo yum update -y
+          sudo amazon-linux-extras install php7.4 -y
+          sudo yum install httpd -y
+          sudo yum install mysql -y
+          sudo yum install php-mysqlnd php-fpm php-json php-xml php-gd php-mbstring -y
+          sudo systemctl enable httpd
+          sudo systemctl start httpd
+          wget https://wordpress.org/latest.tar.gz
+          tar -xvzf latest.tar.gz
+          sudo mv wordpress/* /var/www/html/
+          sudo chown -R apache:apache /var/www/html/
+          sudo systemctl restart httpd
+          sudo cp /var/www/html/wp-config-sample.php /var/www/html/wp-config.php
+          sudo sed -i "s/database_name_here/${MyRdsDatabase.DBName}/" /var/www/html/wp-config.php
+          sudo sed -i "s/username_here/${MyRdsDatabase.MasterUsername}/" /var/www/html/wp-config.php
+          sudo sed -i "s/password_here/${DatabaseUserPassword}/" /var/www/html/wp-config.php
+          sudo sed -i "s/localhost/${MyRdsDatabase.Endpoint.Address}/" /var/www/html/wp-config.php
+          sudo systemctl restart httpd
+      Tags:
+      - Key: Name
+        Value: mustafa-ec2-instance
+
+  MyTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: mustafa-TG
+      TargetType: instance
+      Protocol: HTTP
+      Port: 80
+      HealthCheckPath: /wp-admin/install.php
+      VpcId: !Ref MyVPC
+      Targets:
+      - Id: !Ref MyEC2Instance
+
+  MyALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: application
+      Name: mustafa-LB
+      Scheme: internet-facing
+      IpAddressType: ipv4
+      SecurityGroups:
+      - !Ref MySecurityGroup
+      Subnets:
+      - !Ref MyPublicSubnetuswest1a
+      - !Ref MyPublicSubnetuswest1c
+
+  MyALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn: !Ref MyTargetGroup
+      LoadBalancerArn: !Ref MyALB
+      Port: 80
+      Protocol: HTTP
